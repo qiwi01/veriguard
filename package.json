@@ -1,0 +1,19 @@
+{
+  "name": "veriguard-bot",
+  "version": "2.0.0",
+  "description": "🤖 VeriGuard - Advanced Telegram Welcome Bot with captcha verification, PostgreSQL-ready storage, admin commands, and rate limiting",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node src/index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["telegram", "bot", "verification", "captcha", "welcome", "admin"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "telegraf": "^4.16.3"
+  }
+}
