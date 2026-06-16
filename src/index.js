@@ -25,8 +25,24 @@ const UserCommands = require('./commands/user');
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_USER_ID = Number(process.env.ADMIN_USER_ID);
 const PORT = Number(process.env.PORT) || 8080;
-const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
-const PUBLIC_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN;
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || 'default-secret-change-me';
+
+// Detect Railway deployment: check multiple env vars Railway may set
+const IS_RAILWAY = !!(
+  process.env.RAILWAY_SERVICE_NAME ||
+  process.env.RAILWAY_ENVIRONMENT ||
+  process.env.RAILWAY_PROJECT_ID ||
+  process.env.RAILWAY_PUBLIC_DOMAIN
+);
+
+// Railway auto-sets RAILWAY_PUBLIC_DOMAIN. If not set (fallback), construct one.
+const PUBLIC_DOMAIN =
+  process.env.RAILWAY_PUBLIC_DOMAIN ||
+  (process.env.RAILWAY_SERVICE_NAME
+    ? `${process.env.RAILWAY_SERVICE_NAME}.up.railway.app`
+    : '');
+
+const USE_WEBHOOK = IS_RAILWAY && !!PUBLIC_DOMAIN;
 
 if (!BOT_TOKEN) {
   console.error('❌ BOT_TOKEN is required. Set it in your .env file.');
@@ -36,6 +52,8 @@ if (!BOT_TOKEN) {
 if (!ADMIN_USER_ID) {
   console.warn('⚠️  ADMIN_USER_ID not set. Admin commands will be disabled.');
 }
+
+console.log(`🔧 Mode: ${USE_WEBHOOK ? 'Webhook' : 'Polling'}${IS_RAILWAY ? ' (Railway detected)' : ' (local)'}`);
 
 // -------------------- Bot Initialization --------------------
 
@@ -177,40 +195,58 @@ app.get('/', (req, res) => {
 
 async function launchBot() {
   try {
-    if (PUBLIC_DOMAIN) {
-      // 🌐 Webhook mode (production - Railway, Render, etc.)
-      console.log(`🌐 Starting webhook server on port ${PORT}...`);
+    // Clear any existing webhook/polling sessions to avoid 409 conflict
+    console.log('🔄 Clearing stale webhook connections...');
+    await bot.telegram.deleteWebhook({ drop_pending_updates: true });
 
-      // Set the Telegram webhook
-      const webhookUrl = `https://${PUBLIC_DOMAIN}/webhook`;
-      await bot.telegram.setWebhook(webhookUrl, {
-        secret_token: WEBHOOK_SECRET,
-      });
+    // Register the webhook callback as Express middleware
+    app.post('/webhook', bot.webhookCallback('/webhook', {
+      secretToken: WEBHOOK_SECRET,
+    }));
 
-      // Register the webhook callback as Express middleware
-      app.post('/webhook', bot.webhookCallback('/webhook', {
-        secretToken: WEBHOOK_SECRET,
-      }));
+    // Start Express server FIRST (Railway health check needs this to detect the port)
+    app.listen(PORT, async () => {
+      console.log(`🚀 Health check server running on port ${PORT}`);
 
-      console.log(`✅ Webhook set to: ${webhookUrl}`);
+      try {
+        if (PUBLIC_DOMAIN) {
+          // 🌐 Webhook mode (production - Railway, Render, etc.)
+          const webhookUrl = `https://${PUBLIC_DOMAIN}/webhook`;
+          console.log(`🌐 Setting webhook to: ${webhookUrl}`);
 
-      // Start Express server
-      app.listen(PORT, () => {
-        console.log(`🚀 Server running on port ${PORT}`);
-        console.log('🤖 VeriGuard is running with webhook!');
-      });
-    } else {
-      // 📡 Polling mode (development)
-      console.log('📡 Starting in polling mode...');
-      await bot.launch();
-      console.log('🤖 VeriGuard is running with long polling!');
-    }
+          await bot.telegram.setWebhook(webhookUrl, {
+            secret_token: WEBHOOK_SECRET,
+          });
 
-    console.log('──────────────────────────────');
-    console.log('  VeriGuard v2.0.0');
-    console.log(`  👥 Users: ${db.getTotalCount()}`);
-    console.log(`  ✅ Verified: ${db.getVerifiedCount()}`);
-    console.log('──────────────────────────────');
+          console.log('✅ Webhook set successfully');
+          console.log('🤖 VeriGuard is running with webhook!');
+        } else if (IS_RAILWAY) {
+          // Railway doesn't have a public domain yet — use polling as a fallback
+          // This should not happen if Railway sets RAILWAY_PUBLIC_DOMAIN
+          console.log('⚠️  Railway detected but no public domain. Starting with polling...');
+          await bot.launch();
+          console.log('🤖 VeriGuard is running with polling (Railway fallback)');
+        } else {
+          // 📡 Polling mode (development)
+          console.log('📡 Starting in polling mode...');
+          await bot.launch();
+          console.log('🤖 VeriGuard is running with long polling!');
+        }
+      } catch (err) {
+        // If webhook fails (e.g. domain not ready), fall back to polling
+        console.error('⚠️  Webhook setup failed, falling back to polling:', err.message);
+        await bot.launch().catch(e => {
+          console.error('❌ Polling also failed:', e.message);
+          process.exit(1);
+        });
+      }
+
+      console.log('──────────────────────────────');
+      console.log('  VeriGuard v2.0.0');
+      console.log(`  👥 Users: ${db.getTotalCount()}`);
+      console.log(`  ✅ Verified: ${db.getVerifiedCount()}`);
+      console.log('──────────────────────────────');
+    });
   } catch (err) {
     console.error('❌ Failed to launch bot:', err);
     process.exit(1);
