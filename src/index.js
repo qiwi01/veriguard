@@ -46,6 +46,11 @@ const userCommands = new UserCommands();
 // Maximum captcha attempts before reset
 const MAX_CAPTCHA_ATTEMPTS = 3;
 
+// -------------------- Middleware Registration --------------------
+
+// Apply rate limiting on text messages (captcha attempts)
+bot.use(rateLimiter.textLimit());
+
 // -------------------- Command Registration --------------------
 
 // Register user commands
@@ -76,14 +81,6 @@ bot.on('text', async (ctx) => {
 
   if (user.isBanned) {
     return ctx.reply('🚫 You are banned from using this bot.');
-  }
-
-  // Apply rate limiting for captcha attempts
-  const remaining = rateLimiter.getRemainingAttempts(userId);
-  if (remaining <= 0) {
-    return ctx.reply(
-      '⏳ Rate limited. Please wait 10 seconds before trying again.'
-    );
   }
 
   const userAnswer = Number(ctx.message.text);
@@ -156,6 +153,9 @@ bot.catch((err, ctx) => {
 
 const app = express();
 
+// Parse JSON bodies for webhook
+app.use(express.json());
+
 // Health check endpoint
 app.get('/', (req, res) => {
   res.json({
@@ -173,12 +173,6 @@ app.get('/', (req, res) => {
   });
 });
 
-// Webhook endpoint for Telegram updates (if using webhook mode)
-app.post('/webhook', (req, res) => {
-  // The webhook secret is validated by Telegraf middleware
-  res.sendStatus(200);
-});
-
 // -------------------- Launch --------------------
 
 async function launchBot() {
@@ -187,23 +181,22 @@ async function launchBot() {
       // 🌐 Webhook mode (production - Railway, Render, etc.)
       console.log(`🌐 Starting webhook server on port ${PORT}...`);
 
+      // Set the Telegram webhook
+      const webhookUrl = `https://${PUBLIC_DOMAIN}/webhook`;
+      await bot.telegram.setWebhook(webhookUrl, {
+        secret_token: WEBHOOK_SECRET,
+      });
+
+      // Register the webhook callback as Express middleware
+      app.post('/webhook', bot.webhookCallback('/webhook', {
+        secretToken: WEBHOOK_SECRET,
+      }));
+
+      console.log(`✅ Webhook set to: ${webhookUrl}`);
+
       // Start Express server
-      app.listen(PORT, async () => {
-        console.log(`🚀 Health check server running on port ${PORT}`);
-
-        // Set webhook
-        const webhookUrl = `https://${PUBLIC_DOMAIN}/webhook`;
-        await bot.telegram.setWebhook(webhookUrl, {
-          secret_token: WEBHOOK_SECRET,
-        });
-
-        console.log(`✅ Webhook set to: ${webhookUrl}`);
-
-        // Launch bot in webhook mode
-        bot.startWebhook('/webhook', {
-          secretToken: WEBHOOK_SECRET,
-        }, app);
-
+      app.listen(PORT, () => {
+        console.log(`🚀 Server running on port ${PORT}`);
         console.log('🤖 VeriGuard is running with webhook!');
       });
     } else {

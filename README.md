@@ -112,15 +112,31 @@ _(Only the user whose ID matches `ADMIN_USER_ID` can use these)_
 
 ## 🚀 Deploy to Production (Railway)
 
-The bot is production-ready with webhook support:
+The bot is production-ready with webhook support. Railway auto-detects deployment via `Procfile` and `railway.json`.
 
-```bash
-# On Railway, just set these environment variables:
-# BOT_TOKEN, ADMIN_USER_ID, WEBHOOK_SECRET
-# Railway provides RAILWAY_PUBLIC_DOMAIN automatically
-```
+### One-click Deploy
 
-No code changes needed — the bot auto-detects if it should use webhook (production) or polling (development).
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new?template=https://github.com/qiwi01/viro)
+
+### Manual Deploy
+
+1. Push your code to GitHub
+2. Go to [Railway Dashboard](https://railway.app/dashboard) → **New Project** → **Deploy from GitHub repo**
+3. Select your repository
+4. Add environment variables in Railway:
+   ```
+   BOT_TOKEN=your_bot_token_from_botfather
+   ADMIN_USER_ID=your_telegram_user_id
+   WEBHOOK_SECRET=any_random_string_you_choose
+   ```
+5. Railway auto-sets `RAILWAY_PUBLIC_DOMAIN` — the bot detects it and switches to webhook mode automatically
+6. The health check at `https://your-app.railway.app/` shows live stats
+
+> **No code changes needed** — the bot auto-detects if it should use webhook (Railway) or polling (local).
+
+### Deploy to Vercel
+
+Vercel is not recommended for long-running bots (serverless timeout limits). Use Railway for production.
 
 ---
 

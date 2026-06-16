@@ -18,13 +18,22 @@ class UserCommands {
       const firstName = ctx.from.first_name || 'User';
       const username = ctx.from.username;
 
+      // Check if user already exists and is verified
+      const existingUser = db.get(userId);
+      if (existingUser && existingUser.verified) {
+        return ctx.replyWithMarkdown(
+          '✅ **You are already verified!**\n\n' +
+          'Use /help to see available commands.'
+        );
+      }
+
       // Store user info in database
       db.set(userId, {
         firstName,
         username,
         verified: false,
         attempts: 0,
-        joinedAt: new Date().toISOString(),
+        joinedAt: existingUser?.joinedAt || new Date().toISOString(),
       });
 
       const captcha = captchaEngine.generate('easy');
