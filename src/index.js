@@ -14,6 +14,7 @@
 require('dotenv').config();
 const { Telegraf } = require('telegraf');
 const express = require('express');
+const http = require('http');
 
 const db = require('./database');
 const rateLimiter = require('./middleware/rateLimit');
@@ -27,16 +28,12 @@ const ADMIN_USER_ID = Number(process.env.ADMIN_USER_ID);
 const PORT = Number(process.env.PORT) || 8080;
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || 'default-secret-change-me';
 
-// Log all environment variables for debugging
-console.log('🔍 Environment check:');
-console.log(`  RAILWAY_PUBLIC_DOMAIN: ${process.env.RAILWAY_PUBLIC_DOMAIN || 'not set'}`);
-console.log(`  RAILWAY_STATIC_URL: ${process.env.RAILWAY_STATIC_URL || 'not set'}`);
-console.log(`  RAILWAY_SERVICE_NAME: ${process.env.RAILWAY_SERVICE_NAME || 'not set'}`);
-console.log(`  RAILWAY_ENVIRONMENT: ${process.env.RAILWAY_ENVIRONMENT || 'not set'}`);
-console.log(`  RAILWAY_PROJECT_ID: ${process.env.RAILWAY_PROJECT_ID || 'not set'}`);
-console.log(`  PORT: ${process.env.PORT || 'not set'}`);
+// Railway auto-sets RAILWAY_PUBLIC_DOMAIN or RAILWAY_STATIC_URL
+// If both are missing, we'll auto-detect from first incoming request
+const ENV_PUBLIC_DOMAIN =
+  process.env.RAILWAY_PUBLIC_DOMAIN ||
+  process.env.RAILWAY_STATIC_URL || '';
 
-// Detect Railway deployment
 const IS_RAILWAY = !!(
   process.env.RAILWAY_SERVICE_NAME ||
   process.env.RAILWAY_ENVIRONMENT ||
@@ -44,14 +41,6 @@ const IS_RAILWAY = !!(
   process.env.RAILWAY_PUBLIC_DOMAIN ||
   process.env.RAILWAY_STATIC_URL
 );
-
-// Get public domain - Railway may set RAILWAY_PUBLIC_DOMAIN or RAILWAY_STATIC_URL
-const PUBLIC_DOMAIN =
-  process.env.RAILWAY_PUBLIC_DOMAIN ||
-  process.env.RAILWAY_STATIC_URL ||
-  '';
-
-const USE_WEBHOOK = IS_RAILWAY && !!PUBLIC_DOMAIN;
 
 if (!BOT_TOKEN) {
   console.error('❌ BOT_TOKEN is required. Set it in your .env file.');
@@ -61,8 +50,6 @@ if (!BOT_TOKEN) {
 if (!ADMIN_USER_ID) {
   console.warn('⚠️  ADMIN_USER_ID not set. Admin commands will be disabled.');
 }
-
-console.log(`🔧 Mode: ${USE_WEBHOOK ? 'Webhook' : 'Polling'}${IS_RAILWAY ? ' (Railway detected)' : ' (local)'}`);
 
 // -------------------- Bot Initialization --------------------
 
@@ -176,12 +163,15 @@ bot.catch((err, ctx) => {
   ctx.reply('An unexpected error occurred. Please try again later.').catch(() => {});
 });
 
-// -------------------- Health Check Server --------------------
+// -------------------- Health Check & Webhook Server --------------------
 
 const app = express();
 
 // Parse JSON bodies for webhook
 app.use(express.json());
+
+// Track whether webhook has been initialized
+let webhookInitialized = false;
 
 // Health check endpoint
 app.get('/', (req, res) => {
@@ -198,62 +188,89 @@ app.get('/', (req, res) => {
     memory: `${(process.memoryUsage().heapUsed / 1024 / 1024).toFixed(1)} MB`,
     timestamp: new Date().toISOString(),
     config: {
-      mode: USE_WEBHOOK ? 'webhook' : 'polling',
+      webhookInitialized,
       onRailway: IS_RAILWAY,
-      publicDomain: PUBLIC_DOMAIN || 'not set',
-      host: req.headers?.host || 'unknown',
+      detectedHost: req.headers.host || 'unknown',
+      envPublicDomain: ENV_PUBLIC_DOMAIN || 'not set',
     },
   });
 });
 
+// Manual webhook setup endpoint (call via browser: https://your-app.railway.app/setwebhook)
+app.get('/setup', async (req, res) => {
+  try {
+    const host = ENV_PUBLIC_DOMAIN || req.headers.host || '';
+    if (!host) {
+      return res.status(400).json({ error: 'Cannot detect host. Set RAILWAY_PUBLIC_DOMAIN env var.' });
+    }
+    const webhookUrl = `https://${host}/webhook`;
+    await bot.telegram.setWebhook(webhookUrl, {
+      secret_token: WEBHOOK_SECRET,
+    });
+    const info = await bot.telegram.getWebhookInfo();
+    webhookInitialized = true;
+    res.json({ success: true, webhookUrl, webhookInfo: info });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // -------------------- Launch --------------------
+
+// Store server reference for graceful shutdown
+let server;
+
+async function tryInitWebhook() {
+  // Try to set up webhook using environment variable or auto-detect later
+  if (ENV_PUBLIC_DOMAIN) {
+    try {
+      const webhookUrl = `https://${ENV_PUBLIC_DOMAIN}/webhook`;
+      console.log(`🌐 Setting webhook to: ${webhookUrl}`);
+      await bot.telegram.setWebhook(webhookUrl, {
+        secret_token: WEBHOOK_SECRET,
+      });
+      webhookInitialized = true;
+      console.log('✅ Webhook set successfully via env domain');
+      console.log('🤖 VeriGuard is running with webhook!');
+      return true;
+    } catch (err) {
+      console.error('⚠️  Failed to set webhook via env domain:', err.message);
+    }
+  }
+  return false;
+}
 
 async function launchBot() {
   try {
-    // Clear any existing webhook/polling sessions to avoid 409 conflict
+    // Always clear stale connections first
     console.log('🔄 Clearing stale webhook connections...');
     await bot.telegram.deleteWebhook({ drop_pending_updates: true });
 
-    // Register the webhook callback as Express middleware
+    // Register the webhook callback on Express
     app.post('/webhook', bot.webhookCallback('/webhook', {
       secretToken: WEBHOOK_SECRET,
     }));
 
-    // Start Express server FIRST (Railway health check needs this to detect the port)
-    app.listen(PORT, async () => {
+    // Start Express server
+    server = app.listen(PORT, async () => {
       console.log(`🚀 Health check server running on port ${PORT}`);
 
-      try {
-        if (PUBLIC_DOMAIN) {
-          // 🌐 Webhook mode (production - Railway, Render, etc.)
-          const webhookUrl = `https://${PUBLIC_DOMAIN}/webhook`;
-          console.log(`🌐 Setting webhook to: ${webhookUrl}`);
+      // Try setting webhook using env vars (works if RAILWAY_PUBLIC_DOMAIN is set)
+      const webhookSet = await tryInitWebhook();
 
-          await bot.telegram.setWebhook(webhookUrl, {
-            secret_token: WEBHOOK_SECRET,
-          });
-
-          console.log('✅ Webhook set successfully');
-          console.log('🤖 VeriGuard is running with webhook!');
-        } else if (IS_RAILWAY) {
-          // Railway doesn't have a public domain yet — use polling as a fallback
-          // This should not happen if Railway sets RAILWAY_PUBLIC_DOMAIN
-          console.log('⚠️  Railway detected but no public domain. Starting with polling...');
+      if (!webhookSet) {
+        if (IS_RAILWAY) {
+          console.log('⚠️  No public domain detected. Starting polling mode on Railway.');
+          console.log('⚡ Visit /setup after deployment to configure webhook automatically.');
+          console.log('⚡ Or set RAILWAY_PUBLIC_DOMAIN env var and redeploy.');
           await bot.launch();
-          console.log('🤖 VeriGuard is running with polling (Railway fallback)');
+          console.log('🤖 VeriGuard is running with polling!');
         } else {
-          // 📡 Polling mode (development)
+          // 📡 Polling mode (local development)
           console.log('📡 Starting in polling mode...');
           await bot.launch();
           console.log('🤖 VeriGuard is running with long polling!');
         }
-      } catch (err) {
-        // If webhook fails (e.g. domain not ready), fall back to polling
-        console.error('⚠️  Webhook setup failed, falling back to polling:', err.message);
-        await bot.launch().catch(e => {
-          console.error('❌ Polling also failed:', e.message);
-          process.exit(1);
-        });
       }
 
       console.log('──────────────────────────────');
@@ -273,12 +290,14 @@ async function launchBot() {
 process.once('SIGINT', () => {
   console.log('\n🛑 Shutting down...');
   bot.stop('SIGINT');
+  if (server) server.close();
   process.exit(0);
 });
 
 process.once('SIGTERM', () => {
   console.log('\n🛑 Shutting down...');
   bot.stop('SIGTERM');
+  if (server) server.close();
   process.exit(0);
 });
 
