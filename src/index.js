@@ -197,6 +197,12 @@ app.get('/', (req, res) => {
     },
     memory: `${(process.memoryUsage().heapUsed / 1024 / 1024).toFixed(1)} MB`,
     timestamp: new Date().toISOString(),
+    config: {
+      mode: USE_WEBHOOK ? 'webhook' : 'polling',
+      onRailway: IS_RAILWAY,
+      publicDomain: PUBLIC_DOMAIN || 'not set',
+      host: req.headers?.host || 'unknown',
+    },
   });
 });
 
