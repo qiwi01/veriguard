@@ -27,20 +27,29 @@ const ADMIN_USER_ID = Number(process.env.ADMIN_USER_ID);
 const PORT = Number(process.env.PORT) || 8080;
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || 'default-secret-change-me';
 
-// Detect Railway deployment: check multiple env vars Railway may set
+// Log all environment variables for debugging
+console.log('🔍 Environment check:');
+console.log(`  RAILWAY_PUBLIC_DOMAIN: ${process.env.RAILWAY_PUBLIC_DOMAIN || 'not set'}`);
+console.log(`  RAILWAY_STATIC_URL: ${process.env.RAILWAY_STATIC_URL || 'not set'}`);
+console.log(`  RAILWAY_SERVICE_NAME: ${process.env.RAILWAY_SERVICE_NAME || 'not set'}`);
+console.log(`  RAILWAY_ENVIRONMENT: ${process.env.RAILWAY_ENVIRONMENT || 'not set'}`);
+console.log(`  RAILWAY_PROJECT_ID: ${process.env.RAILWAY_PROJECT_ID || 'not set'}`);
+console.log(`  PORT: ${process.env.PORT || 'not set'}`);
+
+// Detect Railway deployment
 const IS_RAILWAY = !!(
   process.env.RAILWAY_SERVICE_NAME ||
   process.env.RAILWAY_ENVIRONMENT ||
   process.env.RAILWAY_PROJECT_ID ||
-  process.env.RAILWAY_PUBLIC_DOMAIN
+  process.env.RAILWAY_PUBLIC_DOMAIN ||
+  process.env.RAILWAY_STATIC_URL
 );
 
-// Railway auto-sets RAILWAY_PUBLIC_DOMAIN. If not set (fallback), construct one.
+// Get public domain - Railway may set RAILWAY_PUBLIC_DOMAIN or RAILWAY_STATIC_URL
 const PUBLIC_DOMAIN =
   process.env.RAILWAY_PUBLIC_DOMAIN ||
-  (process.env.RAILWAY_SERVICE_NAME
-    ? `${process.env.RAILWAY_SERVICE_NAME}.up.railway.app`
-    : '');
+  process.env.RAILWAY_STATIC_URL ||
+  '';
 
 const USE_WEBHOOK = IS_RAILWAY && !!PUBLIC_DOMAIN;
 
